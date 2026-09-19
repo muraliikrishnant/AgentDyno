@@ -71,15 +71,11 @@ from harbor.environments.definition import effective_exec_cwd
 # gateway) never requires it.
 try:
     from contree_sdk import Contree
-    from contree_sdk.config import ContreeConfig
-    from contree_sdk.auth import IAMAuth
 
     _HAS_CONTREE = True
 except ImportError:
     _HAS_CONTREE = False
     Contree = None  # type: ignore[assignment,misc]
-    ContreeConfig = None  # type: ignore[assignment,misc]
-    IAMAuth = None  # type: ignore[assignment,misc]
 
 
 class NebiusSandboxMissingDependencyError(RuntimeError):
@@ -189,11 +185,21 @@ class NebiusSandboxEnvironment(BaseEnvironment):
             raise ValueError("NebiusSandboxEnvironment requires a base image.")
 
     async def start(self, force_build: bool) -> None:
+        # Confirmed 2026-09-19 against the real contree-sdk==0.3.6 client and
+        # the official quickstart: a bare `Contree()` auto-discovers
+        # base_url/token/project_id from NEBIUS_API_KEY/NEBIUS_PROJECT_ID
+        # (ContreeConfig(auth=IAMAuth(...)) is what it builds internally -
+        # no need to construct that ourselves). Live-tested end-to-end
+        # (real network round trip to
+        # https://api.tokenfactory.nebius.com/sandboxes/v1/instances) and
+        # got back 403 Forbidden / "You do not have permission to perform
+        # this action" - request shape, auth, and env-var wiring are all
+        # confirmed correct; the account is not yet approved for Sandboxes
+        # beta access (a separate approval step via the "Describe your
+        # case" form on the Sandboxes product page, not a credentials or
+        # code issue). Re-test once beta access is granted.
         try:
-            auth = IAMAuth(token=self._api_key, base_url=self._base_url)
-            if self._project_id:
-                auth = IAMAuth(token=self._api_key, base_url=self._base_url, project_id=self._project_id)
-            self._client = Contree(ContreeConfig(auth=auth))
+            self._client = Contree(base_url=self._base_url, token=self._api_key)
             # Lazy reference - contree-sdk makes no API call until the first
             # run()/apply_files() against it (confirmed: `use()` just wraps
             # the tag/uuid, see _use_image in
@@ -204,9 +210,16 @@ class NebiusSandboxEnvironment(BaseEnvironment):
             if not self._project_id:
                 hint = (
                     " NEBIUS_PROJECT_ID is not set in this environment - "
-                    "contree_sdk.auth.IAMAuth requires a project id and this "
-                    "is the most likely cause of an auth/permission error "
-                    "here; set NEBIUS_PROJECT_ID from the Nebius console."
+                    "contree_sdk.auth.IAMAuth requires a project id; set "
+                    "NEBIUS_PROJECT_ID from the Nebius console."
+                )
+            elif "Forbidden" in type(e).__name__ or "403" in str(e):
+                hint = (
+                    " This looks like a Sandboxes beta access/entitlement "
+                    "issue rather than a credentials problem - confirm your "
+                    "Nebius account has been approved for Sandboxes beta "
+                    "access (see the 'Describe your case' form on the "
+                    "Sandboxes product page)."
                 )
             raise RuntimeError(
                 f"NebiusSandboxEnvironment.start failed to initialize a "
