@@ -26,4 +26,4 @@ seeds:
 
 gateway_url: "http://127.0.0.1:8000/v1/chat/completions"
 max_steps: 4
-timeout_s: 20
+timeout_s: 90
