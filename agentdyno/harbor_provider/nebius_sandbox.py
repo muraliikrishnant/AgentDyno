@@ -3,16 +3,55 @@
 `NebiusSandboxEnvironment` is the upstream-able Harbor `BaseEnvironment`
 implementation backed by Nebius Token Factory Sandboxes (the "ConTree"
 platform, pip package `contree-sdk`; microVM isolation, checkpoint/branch).
-It now really subclasses `harbor.environments.base.BaseEnvironment` and
-implements every abstract method against the `contree-sdk` client surface
-documented at docs.tokenfactory.nebius.com/sandboxes/. Several exact details
-(the Sandboxes API `base_url`, and a couple of method names for file
-transfer) could not be confirmed from the docs pages reachable during this
-session, and are marked `# TODO(nebius):` below with precise instructions
-for resolving them. Everything else - client construction, image use,
-command exec, lifecycle, error handling - is implemented for real, modeled
-directly on Harbor's own `E2BEnvironment` (harbor/environments/e2b.py), the
-simplest existing cloud-sandbox provider in the installed `harbor` package.
+It really subclasses `harbor.environments.base.BaseEnvironment` and
+implements every abstract method against the real `contree-sdk` client
+surface, which was installed and introspected directly during development
+(`.venv/lib/python3.12/site-packages/contree_sdk/`, version 0.3.6 as of
+2026-09-19) rather than only inferred from docs pages, so the API shapes
+below are confirmed against the actual library source, not guessed:
+
+- `contree_sdk.Contree(base_url=..., token=...)` (or a `ContreeConfig`) is
+  the real async client - see `contree_sdk/sdk/client/_base.py`. There is no
+  `contree_client.httpx.ContreeAsyncClient` (that module does not exist in
+  the installed package; an earlier draft of this file assumed it did).
+- The real default Sandboxes API base_url IS resolvable from the SDK
+  itself: `contree_sdk.auth.IAMAuth.base_url` defaults to
+  `ContreeEndpoint.TOKEN_FACTORY_SANDBOXES` =
+  `"https://api.tokenfactory.nebius.com/sandboxes/"`
+  (`contree_sdk/_internals/utils/config.py`). `IAMAuth` also resolves
+  `token` from the `NEBIUS_API_KEY` env var and `project_id` from
+  `NEBIUS_PROJECT_ID` by default (`contree_sdk/auth.py`), so a bare
+  `Contree()` with no args already does the right thing given the user's
+  existing `.env`, EXCEPT `NEBIUS_PROJECT_ID` is not currently in this
+  project's `.env` - see TODO(nebius) in `start()`.
+- `sdk.images.use(ref)` resolves an image reference lazily (no API call
+  until first `run()`); `image.run(shell=...)`/`image.run(command, args=…)`
+  returns a new (not-yet-executed) image object that is itself awaitable
+  (`_ImageLike.__await__` -> `_await()`), matching the doc's
+  `await image.run(shell=...)` pattern. The executed result is read off
+  `.result` (`ContreeResult`: `.stdout`, `.stderr`, `.exit_code`), not off
+  the awaited image directly.
+- File upload is `await image.apply_files({target_path: source_bytes_or_
+  Path})`, returning a NEW image with the files baked in (images are
+  otherwise immutable/disposable) - confirmed in
+  `contree_sdk/sdk/objects/image_like/_base.py::_apply_files`. Download is
+  `await image.download(image_path, local_path)` / `await
+  image.read(image_path)`; listing is `await image.ls(path)`.
+- No explicit "stop/delete a running sandbox" call was found on the image/
+  client surface introspected - sandboxes appear to be scoped to each `run`
+  invocation (disposable by default) rather than long-lived handles you
+  explicitly tear down, which is architecturally different from E2B/Daytona.
+  `checkpoint`/`branch` in the plan doc's sense map most closely to
+  `tag_as(tag)` (pins the resulting image under a name) and re-`use()`-ing
+  that tag later, but this is inference from the state machine
+  (`ImageState`/`_STATE_MACHINE`) rather than a documented "checkpoint" API
+  call, so it's still marked TODO(nebius) below pending real use.
+
+Everything else - client construction, image use, command exec, lifecycle,
+error handling - is implemented for real, modeled on the *shape* of Harbor's
+own `E2BEnvironment` (harbor/environments/e2b.py), the simplest existing
+cloud-sandbox provider in the installed `harbor` package, but using the
+actually-confirmed contree-sdk calls rather than E2B's.
 
 `LocalSubprocessEnvironment` (bottom of this file) is unchanged: the working
 local fallback used by `agentdyno.cli` today, no Docker/Nebius required.
@@ -31,14 +70,16 @@ from harbor.environments.definition import effective_exec_cwd
 # rest of AgentDyno (mock/local runs, single/subagents orchestration, the
 # gateway) never requires it.
 try:
-    from contree_client.httpx import ContreeAsyncClient
     from contree_sdk import Contree
+    from contree_sdk.config import ContreeConfig
+    from contree_sdk.auth import IAMAuth
 
     _HAS_CONTREE = True
 except ImportError:
     _HAS_CONTREE = False
-    ContreeAsyncClient = None  # type: ignore[assignment,misc]
     Contree = None  # type: ignore[assignment,misc]
+    ContreeConfig = None  # type: ignore[assignment,misc]
+    IAMAuth = None  # type: ignore[assignment,misc]
 
 
 class NebiusSandboxMissingDependencyError(RuntimeError):
@@ -98,33 +139,32 @@ class NebiusSandboxEnvironment(BaseEnvironment):
                 "api_key=...)."
             )
 
-        # TODO(nebius): confirm the real Sandboxes API base_url. The Token
-        # Factory *inference* base_url (NEBIUS_BASE_URL, used by
-        # agentdyno/gateway/proxy.py) is confirmed working, but the docs
-        # pages reachable during this session did not publish a distinct
-        # Sandboxes endpoint. Try, in order: (1) a dedicated
-        # NEBIUS_SANDBOXES_BASE_URL env var if the user's Sandboxes console
-        # documents one, (2) the Sandboxes console's "API" tab for a
-        # project-specific base_url, (3) contree_client's own default (some
-        # SDKs ship a working default and only need the api_key). Until
-        # confirmed, this falls back to the inference base_url's host with
-        # a guessed `/sandboxes` path, which is very likely wrong - it exists
-        # only so `start()` fails with a clear connection/auth error instead
-        # of a confusing AttributeError.
+        # Confirmed real default: contree_sdk.auth.IAMAuth.base_url defaults
+        # to ContreeEndpoint.TOKEN_FACTORY_SANDBOXES, i.e. exactly this URL
+        # (introspected directly from the installed contree-sdk==0.3.6
+        # package, not guessed). Still overridable via base_url=... or
+        # NEBIUS_SANDBOXES_BASE_URL for staging/other environments.
         self._base_url = (
             base_url
             or os.environ.get("NEBIUS_SANDBOXES_BASE_URL")
-            or (os.environ.get("NEBIUS_BASE_URL", "").rstrip("/") + "/sandboxes")
+            or "https://api.tokenfactory.nebius.com/sandboxes/"
         )
+
+        # TODO(nebius): IAMAuth also wants a project_id (defaults to reading
+        # the NEBIUS_PROJECT_ID env var), which is NOT currently in this
+        # project's .env. Sandbox creation may fail with an auth/permission
+        # error until the user adds NEBIUS_PROJECT_ID from their Nebius
+        # console. Surfaced as a clear error in start() below rather than
+        # failing silently.
+        self._project_id = os.environ.get("NEBIUS_PROJECT_ID")
 
         self._base_image = base_image or task_env_config.docker_image or "python:3.12-slim"
 
-        self._api_client: Any = None
-        self._sdk: Any = None
-        self._image: Any = None
-        self._sandbox: Any = None  # result of image.run(...) session, if the
-        # SDK models a persistent handle separately from per-command results;
-        # see start()/exec() for how this is used.
+        self._client: Any = None
+        self._image: Any = None  # a ContreeImage handle from sdk.images.use();
+        # reassigned to the returned image after any apply_files() call,
+        # since contree-sdk images are immutable/disposable (see module
+        # docstring).
 
     # -- BaseEnvironment required overrides ---------------------------------
 
@@ -150,90 +190,98 @@ class NebiusSandboxEnvironment(BaseEnvironment):
 
     async def start(self, force_build: bool) -> None:
         try:
-            self._api_client = ContreeAsyncClient(self._api_key, base_url=self._base_url)
-            self._sdk = Contree(self._api_client)
-            self._image = await self._sdk.images.use(self._base_image)
+            auth = IAMAuth(token=self._api_key, base_url=self._base_url)
+            if self._project_id:
+                auth = IAMAuth(token=self._api_key, base_url=self._base_url, project_id=self._project_id)
+            self._client = Contree(ContreeConfig(auth=auth))
+            # Lazy reference - contree-sdk makes no API call until the first
+            # run()/apply_files() against it (confirmed: `use()` just wraps
+            # the tag/uuid, see _use_image in
+            # contree_sdk/sdk/managers/images/_base.py).
+            self._image = await self._client.images.use(self._base_image)
         except Exception as e:  # noqa: BLE001 - surface a clear, actionable error
+            hint = ""
+            if not self._project_id:
+                hint = (
+                    " NEBIUS_PROJECT_ID is not set in this environment - "
+                    "contree_sdk.auth.IAMAuth requires a project id and this "
+                    "is the most likely cause of an auth/permission error "
+                    "here; set NEBIUS_PROJECT_ID from the Nebius console."
+                )
             raise RuntimeError(
                 f"NebiusSandboxEnvironment.start failed to initialize a "
                 f"Nebius Sandbox against base_url={self._base_url!r} with "
-                f"image={self._base_image!r}: {e}. If this is a connection "
-                f"or 404/auth error, the base_url TODO in __init__ is almost "
-                f"certainly the cause - confirm the real Sandboxes API "
-                f"base_url in the Nebius console and pass it as "
-                f"base_url=... or NEBIUS_SANDBOXES_BASE_URL."
+                f"image={self._base_image!r}: {e}.{hint}"
             ) from e
 
         await self._upload_environment_dir_after_start()
 
     async def stop(self, delete: bool) -> None:
-        # TODO(nebius): the docs pages fetched during this session did not
-        # surface an explicit sandbox stop/delete/teardown method distinct
-        # from image/run session objects going out of scope. If contree-sdk
-        # exposes one (check `python -c "import contree_sdk;
-        # help(contree_sdk.Contree)"` after installing the extra), call it
-        # here, e.g. `await self._sandbox.stop()` /
-        # `await self._sdk.sandboxes.delete(...)`. Until confirmed, this
-        # just drops references so the client/session are garbage collected
-        # rather than raising, so trial teardown never hard-fails on this
-        # unresolved detail.
-        self._sandbox = None
+        # No explicit "stop/delete a running sandbox" call was found on the
+        # contree-sdk client/image surface introspected from the installed
+        # package (contree_sdk/sdk/client/_base.py,
+        # contree_sdk/sdk/objects/image_like/_base.py): images are
+        # disposable-by-default per `run(..., disposable=True)`, so the
+        # platform appears to tear down compute per-invocation rather than
+        # via a long-lived handle you explicitly stop. If a dedicated
+        # teardown/delete method exists (e.g. on a future
+        # `client.instances` or `client.sandboxes` manager not present in
+        # 0.3.6), call it here.
+        # TODO(nebius): re-check `dir(contree_sdk.Contree(...))` against a
+        # newer contree-sdk release for an explicit stop/delete call before
+        # relying on disposable=True alone in production use.
         self._image = None
-        self._sdk = None
-        self._api_client = None
+        self._client = None
 
     async def upload_file(self, source_path: Path | str, target_path: str):
-        # TODO(nebius): confirm exact method name/signature for single-file
-        # upload on contree-sdk's `image`/sandbox object (the docs pages
-        # fetched described `image.run(shell=...)` for command execution but
-        # not a dedicated file-write API). Modeled here on the pattern every
-        # other Harbor provider uses (e2b: `sandbox.files.write(path, bytes)`,
-        # daytona: similar) as the most likely real shape.
+        if self._image is None:
+            raise RuntimeError("NebiusSandboxEnvironment.upload_file called before start().")
         data = Path(source_path).read_bytes()
-        if hasattr(self._image, "files") and hasattr(self._image.files, "write"):
-            await self._image.files.write(target_path, data)
-            return
-        raise NotImplementedError(
-            "NebiusSandboxEnvironment.upload_file: contree-sdk's file-write "
-            "API was not confirmed from available docs. Inspect "
-            "`help(contree_sdk.Contree)` / `help(<image object>)` after "
-            "`pip install contree-sdk` to find the real method and wire it "
-            "in here (see TODO(nebius) comment above)."
-        )
+        # Confirmed: image_like._base._apply_files -> new image with files
+        # baked in (images are immutable; apply_files returns a NEW image,
+        # so we must keep the returned handle for subsequent exec() calls).
+        self._image = await self._image.apply_files({target_path: data})
 
     async def upload_dir(self, source_dir: Path | str, target_dir: str):
+        if self._image is None:
+            raise RuntimeError("NebiusSandboxEnvironment.upload_dir called before start().")
         source_dir = Path(source_dir)
+        files: dict[str, bytes] = {}
         for file_path in source_dir.rglob("*"):
             if file_path.is_file():
                 rel = file_path.relative_to(source_dir).as_posix()
-                await self.upload_file(file_path, f"{target_dir.rstrip('/')}/{rel}")
+                files[f"{target_dir.rstrip('/')}/{rel}"] = file_path.read_bytes()
+        if files:
+            # Single apply_files() call batches the whole directory into one
+            # new image rather than N round trips (confirmed: apply_files
+            # accepts a dict of target_path -> bytes|Path|UploadFileSpec).
+            self._image = await self._image.apply_files(files)
 
     async def download_file(self, source_path: str, target_path: Path | str):
-        # TODO(nebius): same as upload_file - exact read/download method name
-        # unconfirmed. Modeled on e2b's `sandbox.files.read(path,
-        # format="bytes")`.
-        if hasattr(self._image, "files") and hasattr(self._image.files, "read"):
-            data = await self._image.files.read(source_path)
-            Path(target_path).write_bytes(data)
-            return
-        raise NotImplementedError(
-            "NebiusSandboxEnvironment.download_file: contree-sdk's file-read "
-            "API was not confirmed from available docs. See TODO(nebius) "
-            "comment above upload_file for how to resolve this."
-        )
+        if self._image is None:
+            raise RuntimeError("NebiusSandboxEnvironment.download_file called before start().")
+        # Confirmed: _ImageLike.read() -> _read_file() returns bytes.
+        data = await self._image.read(source_path)
+        Path(target_path).write_bytes(data)
 
     async def download_dir(self, source_dir: str, target_dir: Path | str):
-        # TODO(nebius): requires a directory-listing API on contree-sdk to
-        # walk source_dir remotely (see e2b's `sandbox.files.list(...)` for
-        # the pattern this should follow once confirmed). Unconfirmed from
-        # available docs, so this raises rather than silently downloading
-        # nothing.
-        raise NotImplementedError(
-            "NebiusSandboxEnvironment.download_dir: contree-sdk's directory-"
-            "listing API was not confirmed from available docs. See "
-            "TODO(nebius) comments above for how to resolve this once the "
-            "SDK is installed and introspected."
-        )
+        if self._image is None:
+            raise RuntimeError("NebiusSandboxEnvironment.download_dir called before start().")
+        # Confirmed: _ImageLike.ls(path) -> list[ImageFile | ImageDirectory]
+        # (contree_sdk/sdk/objects/image_like/_async.py). Walk recursively,
+        # mirroring E2BEnvironment.download_dir's structure.
+        entries = await self._image.ls(source_dir)
+        target_dir = Path(target_dir)
+        for entry in entries:
+            entry_path = getattr(entry, "path", None) or str(entry)
+            rel = Path(entry_path).relative_to(Path(source_dir))
+            is_dir = type(entry).__name__ == "ImageDirectory"
+            if is_dir:
+                (target_dir / rel).mkdir(parents=True, exist_ok=True)
+                await self.download_dir(entry_path, target_dir / rel)
+            else:
+                (target_dir / rel).parent.mkdir(parents=True, exist_ok=True)
+                await self.download_file(entry_path, target_dir / rel)
 
     async def exec(
         self,
@@ -249,53 +297,63 @@ class NebiusSandboxEnvironment(BaseEnvironment):
                 "succeeded."
             )
 
-        shell_cmd = command
         resolved_cwd = effective_exec_cwd(cwd, self.task_env_config.workdir, None)
-        if resolved_cwd:
-            shell_cmd = f"cd {resolved_cwd!r} && {shell_cmd}"
-        if env:
-            export_prefix = " && ".join(f"export {k}={v!r}" for k, v in env.items())
-            shell_cmd = f"{export_prefix} && {shell_cmd}"
 
         try:
-            result = await self._image.run(shell=shell_cmd)
+            # Confirmed: image.run(shell=..., cwd=..., env=..., timeout=...)
+            # returns a new (not-yet-executed) image that is itself
+            # awaitable (_ImageLike.__await__ -> _await()); this is exactly
+            # the `await image.run(shell=...)` pattern from the docs, now
+            # confirmed against the real signature in
+            # contree_sdk/sdk/objects/image_like/_base.py.
+            executed = await self._image.run(
+                shell=command,
+                cwd=resolved_cwd,
+                env=env or None,
+                timeout=timeout_sec,
+            )
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(
                 f"NebiusSandboxEnvironment.exec failed running {command!r}: "
                 f"{e}"
             ) from e
 
+        result = executed.result
         return ExecResult(
-            stdout=getattr(result, "stdout", None),
-            stderr=getattr(result, "stderr", None),
-            return_code=getattr(result, "exit_code", 1),
+            stdout=result.stdout,
+            stderr=result.stderr,
+            return_code=result.exit_code,
         )
 
     # -- Checkpoint/branch (Nebius-specific, not part of BaseEnvironment) ---
     # The plan doc (section 4/10) wants checkpoint/branch semantics for
-    # profiling backtracking architectures. contree-sdk's docs describe
-    # "fork execution state at any checkpoint" / "return to any previous
-    # state" at a conceptual level; the exact method names were not
-    # confirmed from the docs pages reached during this session.
+    # profiling backtracking architectures. The closest confirmed contree-sdk
+    # primitive is `tag_as(tag)` (contree_sdk/sdk/objects/image_like/_base.py
+    # ::_tag_as): a non-disposable run's resulting image can be pinned under
+    # a tag and later re-resolved via `sdk.images.use(tag)`, which is
+    # structurally a checkpoint/branch mechanism (name a state, come back to
+    # it, fork new runs from it) even though contree-sdk doesn't use those
+    # words. This is inference from the image state machine, not a
+    # documented "checkpoint" API, so it's implemented but flagged for
+    # real-world verification.
 
     async def checkpoint(self, name: str) -> str:
-        # TODO(nebius): confirm the real checkpoint API, e.g.
-        # `await self._image.checkpoint(name=name)` or
-        # `await self._sdk.checkpoints.create(...)`. Likely candidates based
-        # on the "fork execution state" / "return to any previous state"
-        # language in the docs summary, but unconfirmed.
-        raise NotImplementedError(
-            "NebiusSandboxEnvironment.checkpoint: contree-sdk's checkpoint "
-            "API was not confirmed from available docs. See module "
-            "docstring for what to check once contree-sdk is installed."
-        )
+        if self._image is None:
+            raise RuntimeError("NebiusSandboxEnvironment.checkpoint called before start().")
+        # TODO(nebius): verify this actually persists a resumable snapshot
+        # rather than just labeling the current disposable result - test
+        # against a real Nebius Sandboxes account before relying on it for
+        # backtracking-architecture profiling.
+        self._image = await self._image.tag_as(name)
+        return name
 
     async def branch(self, checkpoint_name: str) -> "NebiusSandboxEnvironment":
-        # TODO(nebius): see checkpoint() above.
-        raise NotImplementedError(
-            "NebiusSandboxEnvironment.branch: contree-sdk's branch/fork API "
-            "was not confirmed from available docs. See module docstring."
-        )
+        if self._client is None:
+            raise RuntimeError("NebiusSandboxEnvironment.branch called before start().")
+        # TODO(nebius): verify use(tag) resolves to the exact checkpointed
+        # state rather than the image's current HEAD under that tag.
+        self._image = await self._client.images.use(checkpoint_name)
+        return self
 
 
 class LocalSubprocessEnvironment:
