@@ -25,6 +25,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+nebius-sandbox = ["contree-sdk"]
+harbor = ["harbor"]
 
 [project.scripts]
 agentdyno = "agentdyno.cli:app"
