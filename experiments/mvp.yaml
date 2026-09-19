@@ -1,0 +1,31 @@
+# MVP experiment matrix - Week 1 thin vertical slice.
+#
+# Only the `single` orchestration is implemented today (subagents/plan_execute
+# are structural stubs, see agentdyno/harness/orchestration/). "Tiers" are
+# simulated via MockModelBackend latency profiles, standing in for real
+# Nemotron Nano/Super/Ultra routing.
+# TODO(nebius): once the gateway forwards to real Token Factory inference,
+# point `model` at confirmed live catalog IDs and drop tier -> mock-latency
+# mapping in agentdyno/gateway/mock_backend.py.
+
+architectures:
+  - single
+
+tasks:
+  - experiments/tasks/task1_fix_add
+  - experiments/tasks/task2_fix_reverse
+  - experiments/tasks/task3_fix_fizzbuzz
+  - experiments/tasks/task4_fix_dedupe
+  - experiments/tasks/task5_fix_sort
+
+model_tiers:
+  - nano
+  - super
+
+seeds:
+  - 1
+  - 2
+
+gateway_url: "http://127.0.0.1:8000/v1/chat/completions"
+max_steps: 4
+timeout_s: 20
