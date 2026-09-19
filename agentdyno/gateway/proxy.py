@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from agentdyno.gateway import budget
 from agentdyno.gateway.mock_backend import MockModelBackend
+from agentdyno.gateway.models import TIER_MODEL_IDS
 from agentdyno.gateway.spans import SPANS_DIR, SpanRecorder
 
 app = FastAPI(title="AgentDyno Telemetry Gateway")
@@ -36,7 +37,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
-    model: str = "nvidia/nemotron-3-super-120b-a12b"
+    model: str = TIER_MODEL_IDS["super"]
     messages: list[ChatMessage]
     stream: bool = True
     tier: str = "super"

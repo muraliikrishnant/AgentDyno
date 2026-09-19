@@ -1,13 +1,12 @@
 """Context compaction: summarize older turns with a cheap model tier instead
-of truncating them away outright.
-
-# TODO(nebius): route this call through the gateway with tier="nano"
-# (nvidia/nemotron-3-nano-*) once real Nemotron Nano access is confirmed -
-# compaction is exactly the high-frequency/cheap workload Nano is meant for.
+of truncating them away outright. Uses tier="nano" (see agentdyno.gateway.models)
+- compaction is exactly the high-frequency/cheap workload Nano is meant for.
 """
 from __future__ import annotations
 
 import httpx
+
+from agentdyno.gateway.models import model_id_for_tier
 
 GATEWAY_URL = "http://127.0.0.1:8000/v1/chat/completions"
 
@@ -25,7 +24,7 @@ def compact_messages(messages: list[dict], gateway_url: str = GATEWAY_URL, trial
     ]
 
     payload = {
-        "model": "nvidia/nemotron-3-nano-8b",
+        "model": model_id_for_tier("nano"),
         "messages": summary_prompt,
         "tier": "nano",
         "role": "compaction",

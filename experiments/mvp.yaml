@@ -1,12 +1,10 @@
 # MVP experiment matrix - Week 1 thin vertical slice.
 #
 # Only the `single` orchestration is implemented today (subagents/plan_execute
-# are structural stubs, see agentdyno/harness/orchestration/). "Tiers" are
-# simulated via MockModelBackend latency profiles, standing in for real
-# Nemotron Nano/Super/Ultra routing.
-# TODO(nebius): once the gateway forwards to real Token Factory inference,
-# point `model` at confirmed live catalog IDs and drop tier -> mock-latency
-# mapping in agentdyno/gateway/mock_backend.py.
+# are structural stubs, see agentdyno/harness/orchestration/). Tier -> model ID
+# mapping lives in agentdyno/gateway/models.py (confirmed against the live
+# Nebius Token Factory catalog on 2026-09-19). With AGENTDYNO_BACKEND=mock
+# (default) tiers select MockModelBackend latency profiles instead.
 
 architectures:
   - single

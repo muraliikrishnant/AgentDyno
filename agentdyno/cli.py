@@ -2,6 +2,7 @@
 serve-gateway`, `agentdyno report`."""
 from __future__ import annotations
 
+import os
 import threading
 import time
 import uuid
@@ -14,6 +15,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from agentdyno.gateway.models import model_id_for_tier
 from agentdyno.harbor_provider.nebius_sandbox import LocalSubprocessEnvironment
 from agentdyno.harness.core import Harness
 from agentdyno.harness.orchestration.single import SingleAgentConfig, run_single_agent
@@ -53,7 +55,8 @@ def run(experiment_path: str):
     max_steps = config.get("max_steps", 4)
     timeout_s = config.get("timeout_s", 20)
 
-    console.print("[bold cyan]Starting telemetry gateway (mock backend)...[/bold cyan]")
+    backend = os.environ.get("AGENTDYNO_BACKEND", "mock")
+    console.print(f"[bold cyan]Starting telemetry gateway ({backend} backend)...[/bold cyan]")
     _start_gateway_in_background()
 
     trials = [
@@ -81,7 +84,7 @@ def run(experiment_path: str):
         try:
             harness = Harness(
                 gateway_url=gateway_url,
-                model=f"nvidia/nemotron-3-{trial['tier']}",
+                model=model_id_for_tier(trial["tier"]),
                 tier=trial["tier"],
                 trial_id=trial_id,
                 max_steps=max_steps,
