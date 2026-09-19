@@ -1,13 +1,15 @@
-# MVP experiment matrix - Week 1 thin vertical slice.
+# MVP experiment matrix - Week 1+2 vertical slice.
 #
-# Only the `single` orchestration is implemented today (subagents/plan_execute
-# are structural stubs, see agentdyno/harness/orchestration/). Tier -> model ID
-# mapping lives in agentdyno/gateway/models.py (confirmed against the live
-# Nebius Token Factory catalog on 2026-09-19). With AGENTDYNO_BACKEND=mock
-# (default) tiers select MockModelBackend latency profiles instead.
+# `single` and `subagents` orchestrations are both implemented (see
+# agentdyno/harness/orchestration/); `plan_execute` remains a structural
+# stub. Tier -> model ID mapping lives in agentdyno/gateway/models.py
+# (confirmed against the live Nebius Token Factory catalog on 2026-09-19).
+# With AGENTDYNO_BACKEND=mock (default) tiers select MockModelBackend
+# latency profiles instead.
 
 architectures:
   - single
+  - subagents
 
 tasks:
   - experiments/tasks/task1_fix_add

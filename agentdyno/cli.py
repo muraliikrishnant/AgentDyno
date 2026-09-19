@@ -19,6 +19,7 @@ from agentdyno.gateway.models import model_id_for_tier
 from agentdyno.harbor_provider.nebius_sandbox import LocalSubprocessEnvironment
 from agentdyno.harness.core import Harness
 from agentdyno.harness.orchestration.single import SingleAgentConfig, run_single_agent
+from agentdyno.harness.orchestration.subagents import SubagentsConfig, run_subagents
 from agentdyno.profiler.derive import derive
 from agentdyno.profiler.ingest import ingest
 from agentdyno.report.analyze import write_findings
@@ -70,7 +71,7 @@ def run(experiment_path: str):
 
     results = []
     for trial in trials:
-        if trial["architecture"] != "single":
+        if trial["architecture"] not in ("single", "subagents"):
             console.print(f"[yellow]Skipping unimplemented architecture: {trial['architecture']}[/yellow]")
             continue
 
@@ -90,14 +91,24 @@ def run(experiment_path: str):
                 max_steps=max_steps,
                 timeout_s=timeout_s,
             )
-            result = run_single_agent(
-                harness=harness,
-                instruction=instruction,
-                workdir=workdir,
-                broken_file=str(Path(workdir) / "broken.py"),
-                solution_file=str(Path(workdir) / "solution.py"),
-                config=SingleAgentConfig(max_steps=max_steps, seed=trial["seed"]),
-            )
+            if trial["architecture"] == "subagents":
+                result = run_subagents(
+                    harness=harness,
+                    instruction=instruction,
+                    workdir=workdir,
+                    broken_file=str(Path(workdir) / "broken.py"),
+                    solution_file=str(Path(workdir) / "solution.py"),
+                    config=SubagentsConfig(max_steps_per_subagent=max_steps, seed=trial["seed"]),
+                )
+            else:
+                result = run_single_agent(
+                    harness=harness,
+                    instruction=instruction,
+                    workdir=workdir,
+                    broken_file=str(Path(workdir) / "broken.py"),
+                    solution_file=str(Path(workdir) / "solution.py"),
+                    config=SingleAgentConfig(max_steps=max_steps, seed=trial["seed"]),
+                )
             wall_clock_s = time.monotonic() - t_start
             results.append({
                 "trial_id": trial_id,
