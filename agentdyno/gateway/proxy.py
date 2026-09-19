@@ -53,15 +53,18 @@ async def _stream_mock(req: ChatCompletionRequest, spans_file: Path | None):
     recorder = SpanRecorder(model=req.model, tier=req.tier, role=req.role, trial_id=req.trial_id)
     messages = [m.model_dump() for m in req.messages]
 
-    for chunk_text, t in _mock_backend.stream(messages, tier=req.tier):
-        if chunk_text is None:
-            break
-        recorder.record_token(t)
-        yield _sse({
-            "choices": [{"delta": {"content": chunk_text}, "index": 0, "finish_reason": None}]
-        })
-
-    usage = getattr(_mock_backend, "_last_usage", {"prompt_tokens": 0, "completion_tokens": 0})
+    gen = _mock_backend.stream(messages, tier=req.tier)
+    usage = {"prompt_tokens": 0, "completion_tokens": 0}
+    try:
+        while True:
+            chunk_text, t = next(gen)
+            recorder.record_token(t)
+            yield _sse({
+                "choices": [{"delta": {"content": chunk_text}, "index": 0, "finish_reason": None}]
+            })
+    except StopIteration as stop:
+        if stop.value:
+            usage = stop.value
     span = recorder.finalize(usage["prompt_tokens"], usage["completion_tokens"], spans_file)
     yield _sse({
         "choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}],

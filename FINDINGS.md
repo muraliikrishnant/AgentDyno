@@ -4,20 +4,17 @@
 
 ## Narrative
 
-Across both model tiers, the **single** and **subagents** architectures achieve identical 100% success rates, but **subagents** incurs 3–5× more model calls and tool round-trips for no measurable gain in latency or reliability. The **nano** tier is consistently ~2.5× faster than **super** regardless of architecture, making **single + nano** the dominant configuration: it matches the success rate of every other variant while using the fewest model calls (2.0) and yielding the lowest mean time-to-first-token (≈110 ms).
+The function has an off-by-one error; let me fix it.
 
 ## Per-architecture aggregates
 
 | architecture | tier | trials | success_rate | ttft_mean_s | itl_p99_s | cost_per_solved_task |
 |---|---|---|---|---|---|---|
-| single | nano | 10 | 1.00 | 0.110 | 0.024 | 0.000000 |
-| single | super | 10 | 1.00 | 0.287 | 0.038 | 0.000000 |
-| subagents | nano | 10 | 1.00 | 0.110 | 0.025 | 0.000000 |
-| subagents | super | 10 | 1.00 | 0.275 | 0.039 | 0.000000 |
+| single | nano | 10 | 1.00 | 0.110 | 0.024 | 0.000008 |
+| single | super | 10 | 1.00 | 0.324 | 0.038 | 0.000049 |
+| subagents | nano | 10 | 1.00 | 0.106 | 0.025 | 0.000045 |
+| subagents | super | 10 | 1.00 | 0.267 | 0.039 | 0.000139 |
 
 ## Pareto frontier (success vs cost)
 
-- **single / nano**: success_rate=1.00, cost_per_solved_task=$0.000000
-- **single / super**: success_rate=1.00, cost_per_solved_task=$0.000000
-- **subagents / nano**: success_rate=1.00, cost_per_solved_task=$0.000000
-- **subagents / super**: success_rate=1.00, cost_per_solved_task=$0.000000
+- **single / nano**: success_rate=1.00, cost_per_solved_task=$0.000008

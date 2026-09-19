@@ -67,9 +67,8 @@ class MockModelBackend:
             time.sleep(itl_s)
             yield tok + " ", time.monotonic()
 
-        completion_tokens = len(tokens)
-        yield None, time.monotonic()  # sentinel: stream done
-        self._last_usage = {
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-        }
+        # `return` (not shared instance state) so usage travels back to the
+        # caller via StopIteration.value - safe under concurrent callers
+        # (e.g. the subagents architecture's real concurrent threads), unlike
+        # a self._last_usage attribute on this shared MockModelBackend instance.
+        return {"prompt_tokens": prompt_tokens, "completion_tokens": len(tokens)}
