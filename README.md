@@ -53,6 +53,13 @@ Every remaining integration point is marked with a `# TODO(nebius):`,
 `# TODO(harbor):`, or `# TODO(tavily):` comment stating exactly what's
 still needed. Search the repo for those.
 
+## Contributing
+
+Contributions welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup
+and how to verify a change. Issues tagged
+[`good first issue`](../../issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+are a good place to start.
+
 ## Architecture summary
 
 ```
