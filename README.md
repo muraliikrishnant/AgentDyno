@@ -40,14 +40,22 @@ constructed it, called `start()`, and had `exec()` reach the real
 `https://api.tokenfactory.nebius.com/sandboxes/` endpoint (a real HTTP round
 trip, not a mock), which returned a real permission-scoped error because
 this Nebius account is missing `NEBIUS_PROJECT_ID`/sandbox entitlements —
-a credentials/access gap, not a code gap. Full `harbor run` against one of
-AgentDyno's toy tasks was **not** reached this session: `harbor`'s CLI does
-support pointing at a custom environment by import path
-(`--env module:Class`, no plugin-registry hacking needed — see
-`harbor.cli.plugin_registry.resolve_plugin_import_path`), but AgentDyno's
-toy tasks (`experiments/tasks/*`) don't have Harbor's task manifest format
-(`task.toml`, `environment/`, etc.), and building one compliant task is a
-separate, non-trivial follow-up.
+a credentials/access gap, not a code gap. All five toy tasks under
+`experiments/tasks/` now have Harbor task manifests, task environments,
+solver scripts, and test verifiers. Harbor 0.23.0's task configuration parser
+accepts each manifest. Run one using its known solution and the custom
+environment:
+
+```bash
+harbor run -p experiments/tasks/task1_fix_add \
+  -a oracle \
+  -e agentdyno.harbor_provider.nebius_sandbox:NebiusSandboxEnvironment
+```
+
+The command needs a Nebius Sandboxes account with `NEBIUS_PROJECT_ID` and beta
+entitlement. A live sandbox trial remains unverified: the available account
+received HTTP 403. Local tests verify task package completeness and confirm
+each solution passes its regression tests; they do not claim a cloud trial ran.
 
 Every remaining integration point is marked with a `# TODO(nebius):`,
 `# TODO(harbor):`, or `# TODO(tavily):` comment stating exactly what's
@@ -64,7 +72,7 @@ are a good place to start.
 
 ```
 experiment.yaml -> CLI expands matrix -> per trial:
-  LocalSubprocessEnvironment.start()   (Harbor-compliant NebiusSandboxEnvironment: BaseEnvironment tier reached, not wired into `harbor run` yet)
+  LocalSubprocessEnvironment.start()   (Harbor-compliant NebiusSandboxEnvironment; five Harbor task packages added, live trial pending Nebius access)
   -> Harness.run() -> gateway /v1/chat/completions (streaming, telemetry-captured)
        -> MockModelBackend | real Nebius Token Factory / Nemotron (AGENTDYNO_BACKEND)
   -> run_tests() -> pass/fail
@@ -153,11 +161,11 @@ agentdyno serve-gateway
 | `plan_execute` orchestration | Structural stub — raises `NotImplementedError` |
 | Tools (shell/edit/run_tests), context truncate/compaction | **Real**, works today |
 | `LocalSubprocessEnvironment` | **Real** local sandbox fallback, used by `agentdyno run` today |
-| `NebiusSandboxEnvironment` (Harbor provider) | **Partial / Tier 2 of 3.** Real `harbor.environments.base.BaseEnvironment` subclass implementing every abstract method against the real, installed `contree-sdk` API (confirmed by introspecting the package source: real default `base_url`, real `image.run()`/`.result`/`.apply_files()`/`.read()`/`.ls()` shapes). Verified standalone: `start()` + `exec()` reach the real Nebius Sandboxes endpoint and get back a real permission error (missing `NEBIUS_PROJECT_ID`/entitlements on this account — a credentials gap, not a code gap; see `# TODO(nebius)` comments). **Not yet reached:** a full `harbor run` trial — AgentDyno's toy tasks lack Harbor's task manifest format, and `checkpoint`/`branch` semantics are implemented via `contree-sdk`'s `tag_as`/`use` as the closest confirmed primitive, but unverified against a live account |
-| Harbor CLI integration path | Confirmed real: `harbor` supports `--env module:Class` custom environments with no plugin-registry step (`harbor.cli.plugin_registry.resolve_plugin_import_path`). Not yet exercised end-to-end because of the task-manifest gap above |
+| `NebiusSandboxEnvironment` (Harbor provider) | **Partial / Tier 2 of 3.** Real `harbor.environments.base.BaseEnvironment` subclass implementing every abstract method against the installed `contree-sdk` API. Five toy task packages parse with Harbor 0.23.0. A live `harbor run` remains unverified because the available Nebius account received HTTP 403 and lacks confirmed beta entitlement. `checkpoint`/`branch` map to `contree-sdk` `tag_as`/`use` as the closest confirmed primitive, but remain unverified against a live account |
+| Harbor CLI integration path | Harbor 0.23.0 accepts a custom environment import path with `--env module:Class`; no plugin registration is needed. Select tasks with `-p experiments/tasks/<task-directory>`. A live trial still requires Nebius sandbox access |
 | Tavily web search tool | Stub — `# TODO(tavily)`, falls back to a clearly labeled mock result if `TAVILY_API_KEY` unset |
 | `FINDINGS.md` narrative | Generated via `agentdyno report`; supports both `MockModelBackend` and a single real Nemotron Ultra call (`AGENTDYNO_BACKEND=nebius agentdyno report`) — default documented here is `mock` for cheap iteration |
-| Harbor eval framework integration (full trial execution) | Not yet wired; this repo runs its own minimal task/trial loop instead. See `NebiusSandboxEnvironment` row above for how far the Harbor *environment* integration itself got |
+| Harbor eval framework integration (full trial execution) | All five toy tasks have Harbor manifests, task environments, solver scripts, and test verifiers. Local checks validate package completeness and solution correctness. Full remote execution remains unverified until Nebius sandbox access is available; the existing `agentdyno run` loop remains unchanged |
 
 ## License
 
