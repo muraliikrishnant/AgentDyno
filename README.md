@@ -34,20 +34,21 @@ own gateway calls — see `agentdyno/harness/orchestration/subagents.py`).
 `NebiusSandboxEnvironment` is a real `harbor.environments.base.BaseEnvironment`
 subclass (the actual `harbor` PyPI package's ABC, not a standalone stand-in)
 implementing every abstract method against the real, installed `contree-sdk`
-(Nebius Sandboxes / "ConTree") API — confirmed by introspecting the
-installed package source, not just docs. A standalone test successfully
-constructed it, called `start()`, and had `exec()` reach the real
-`https://api.tokenfactory.nebius.com/sandboxes/` endpoint (a real HTTP round
-trip, not a mock), which returned a real permission-scoped error because
-this Nebius account is missing `NEBIUS_PROJECT_ID`/sandbox entitlements —
-a credentials/access gap, not a code gap. Full `harbor run` against one of
-AgentDyno's toy tasks was **not** reached this session: `harbor`'s CLI does
-support pointing at a custom environment by import path
-(`--env module:Class`, no plugin-registry hacking needed — see
-`harbor.cli.plugin_registry.resolve_plugin_import_path`), but AgentDyno's
-toy tasks (`experiments/tasks/*`) don't have Harbor's task manifest format
-(`task.toml`, `environment/`, etc.), and building one compliant task is a
-separate, non-trivial follow-up.
+(Nebius Sandboxes / "ConTree") API. Sandboxes beta access was approved on
+2026-09-21, and `start()` + chained `exec()` calls are now verified working
+live: a file written in one `exec()` call is readable in the next, confirming
+state genuinely persists across calls on a real sandbox (not a mock). Getting
+here required two real fixes discovered against the live account -
+`contree-sdk` runs default to `disposable=True` (each call silently resets
+to a fresh image unless you pass `disposable=False`), and the executed
+result must be reassigned back onto the environment or later calls revert to
+the start()-time image. Full `harbor run` against one of AgentDyno's toy
+tasks is **not** reached yet: `harbor`'s CLI does support pointing at a
+custom environment by import path (`--env module:Class`, no plugin-registry
+hacking needed — see `harbor.cli.plugin_registry.resolve_plugin_import_path`),
+but AgentDyno's toy tasks (`experiments/tasks/*`) don't have Harbor's task
+manifest format (`task.toml`, `environment/`, etc.), and building one
+compliant task is the remaining piece (tracked as issue #4).
 
 Every remaining integration point is marked with a `# TODO(nebius):`,
 `# TODO(harbor):`, or `# TODO(tavily):` comment stating exactly what's
@@ -64,7 +65,7 @@ are a good place to start.
 
 ```
 experiment.yaml -> CLI expands matrix -> per trial:
-  LocalSubprocessEnvironment.start()   (Harbor-compliant NebiusSandboxEnvironment: BaseEnvironment tier reached, not wired into `harbor run` yet)
+  LocalSubprocessEnvironment.start()   (or Harbor-compliant NebiusSandboxEnvironment, live-verified; not wired into `harbor run` yet)
   -> Harness.run() -> gateway /v1/chat/completions (streaming, telemetry-captured)
        -> MockModelBackend | real Nebius Token Factory / Nemotron (AGENTDYNO_BACKEND)
   -> run_tests() -> pass/fail
@@ -153,7 +154,7 @@ agentdyno serve-gateway
 | `plan_execute` orchestration | Structural stub — raises `NotImplementedError` |
 | Tools (shell/edit/run_tests), context truncate/compaction | **Real**, works today |
 | `LocalSubprocessEnvironment` | **Real** local sandbox fallback, used by `agentdyno run` today |
-| `NebiusSandboxEnvironment` (Harbor provider) | **Partial / Tier 2 of 3.** Real `harbor.environments.base.BaseEnvironment` subclass implementing every abstract method against the real, installed `contree-sdk` API (confirmed by introspecting the package source: real default `base_url`, real `image.run()`/`.result`/`.apply_files()`/`.read()`/`.ls()` shapes). Verified standalone: `start()` + `exec()` reach the real Nebius Sandboxes endpoint and get back a real permission error (missing `NEBIUS_PROJECT_ID`/entitlements on this account — a credentials gap, not a code gap; see `# TODO(nebius)` comments). **Not yet reached:** a full `harbor run` trial — AgentDyno's toy tasks lack Harbor's task manifest format, and `checkpoint`/`branch` semantics are implemented via `contree-sdk`'s `tag_as`/`use` as the closest confirmed primitive, but unverified against a live account |
+| `NebiusSandboxEnvironment` (Harbor provider) | **Real, working, live-verified.** Real `harbor.environments.base.BaseEnvironment` subclass implementing every abstract method against the real `contree-sdk` API. Sandboxes beta access was approved 2026-09-21; `start()` + chained `exec()` calls now run for real against the live Nebius Sandboxes endpoint (write a file in one call, read it back in the next — state genuinely persists, confirmed live). Two real bugs were found and fixed against the live account: `contree-sdk` runs default to `disposable=True` (each call silently starts from a fresh image unless you pass `disposable=False`), and the awaited run result must be reassigned back to `self._image` or every subsequent call reverts to the start()-time base image. **Not yet reached:** a full `harbor run` trial — AgentDyno's toy tasks lack Harbor's task manifest format (`task.toml`, `environment/`); `checkpoint`/`branch` semantics (`tag_as`/`use`) are implemented but still unverified live |
 | Harbor CLI integration path | Confirmed real: `harbor` supports `--env module:Class` custom environments with no plugin-registry step (`harbor.cli.plugin_registry.resolve_plugin_import_path`). Not yet exercised end-to-end because of the task-manifest gap above |
 | Tavily web search tool | Stub — `# TODO(tavily)`, falls back to a clearly labeled mock result if `TAVILY_API_KEY` unset |
 | `FINDINGS.md` narrative | Generated via `agentdyno report`; supports both `MockModelBackend` and a single real Nemotron Ultra call (`AGENTDYNO_BACKEND=nebius agentdyno report`) — default documented here is `mock` for cheap iteration |
