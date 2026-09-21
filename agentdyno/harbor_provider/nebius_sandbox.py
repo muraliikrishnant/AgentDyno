@@ -313,17 +313,26 @@ class NebiusSandboxEnvironment(BaseEnvironment):
         resolved_cwd = effective_exec_cwd(cwd, self.task_env_config.workdir, None)
 
         try:
-            # Confirmed: image.run(shell=..., cwd=..., env=..., timeout=...)
-            # returns a new (not-yet-executed) image that is itself
-            # awaitable (_ImageLike.__await__ -> _await()); this is exactly
-            # the `await image.run(shell=...)` pattern from the docs, now
-            # confirmed against the real signature in
-            # contree_sdk/sdk/objects/image_like/_base.py.
+            # Confirmed live 2026-09-21 against a real, beta-approved Nebius
+            # Sandboxes account (see AgentDyno git history for the earlier
+            # 403 Forbidden while beta access was still pending): runs
+            # default to disposable=True, meaning each call starts from a
+            # FRESH copy of the image and any side effects (installed
+            # packages, written files) are thrown away - confirmed by a
+            # real `apt-get update` + `apt-get install` sequence where the
+            # install failed with "Unable to locate package" until
+            # disposable=False was passed explicitly. The awaited run
+            # result IS the executed image itself (has .stdout/.stderr/
+            # .exit_code directly - not nested under .result; also has its
+            # own .run() to chain the next call from this state), so we
+            # must reassign self._image to it or every subsequent exec()
+            # call silently reverts to the original start()-time image.
             executed = await self._image.run(
                 shell=command,
                 cwd=resolved_cwd,
                 env=env or None,
                 timeout=timeout_sec,
+                disposable=False,
             )
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(
@@ -331,11 +340,11 @@ class NebiusSandboxEnvironment(BaseEnvironment):
                 f"{e}"
             ) from e
 
-        result = executed.result
+        self._image = executed
         return ExecResult(
-            stdout=result.stdout,
-            stderr=result.stderr,
-            return_code=result.exit_code,
+            stdout=executed.stdout,
+            stderr=executed.stderr,
+            return_code=executed.exit_code,
         )
 
     # -- Checkpoint/branch (Nebius-specific, not part of BaseEnvironment) ---
