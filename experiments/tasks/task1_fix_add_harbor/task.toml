@@ -1,0 +1,19 @@
+schema_version = "1.4"
+
+[metadata]
+name = "task1_fix_add"
+source = "AgentDyno toy task 1 (experiments/tasks/task1_fix_add), wrapped in Harbor's real task manifest format."
+
+[verifier]
+timeout_sec = 300.0
+
+[agent]
+timeout_sec = 300.0
+
+[environment]
+# No environment/Dockerfile or docker-compose.yaml: a prebuilt image plus
+# environment/ contents is enough (see harbor.environments.definition
+# .should_upload_environment_dir) - Harbor uploads environment/broken.py to
+# the container's working directory after start(), and NebiusSandboxEnvironment
+# reads task_env_config.docker_image as the sdk.images.use() reference.
+docker_image = "python:3.12-slim"

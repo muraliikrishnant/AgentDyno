@@ -59,7 +59,7 @@ local fallback used by `agentdyno.cli` today, no Docker/Nebius required.
 from __future__ import annotations
 
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from harbor.environments.base import BaseEnvironment, ExecResult
@@ -227,6 +227,30 @@ class NebiusSandboxEnvironment(BaseEnvironment):
                 f"image={self._base_image!r}: {e}.{hint}"
             ) from e
 
+        # Bug fix (found running a real end-to-end `harbor run` trial against
+        # a live Nebius sandbox on 2026-09-21): Docker-based environments get
+        # /logs/agent, /logs/verifier, /logs/artifacts, /tests, /solution for
+        # free because those are host bind mounts (see EnvironmentPaths'
+        # docstring in harbor/models/trial/paths.py) - the directories exist
+        # the instant the mount is attached. Cloud providers with no bind
+        # mount (E2B, etc.) must create them explicitly; E2BEnvironment.start
+        # does this via `await self.ensure_dirs(self._mount_targets(...))`
+        # before uploading the environment dir (see harbor/environments/
+        # e2b.py). NebiusSandboxEnvironment was missing this call, so the
+        # first real trial got as far as the OracleAgent applying the
+        # solution and the Verifier running tests/test.sh (both real execs
+        # against the live sandbox), but every write under /logs/... failed
+        # silently (redirecting stdout into a directory that doesn't exist),
+        # and the subsequent download of /logs/verifier then hit a genuine
+        # contree-sdk 404 (ls() raises NotFoundError for a missing path
+        # rather than returning an empty listing), which Harbor's verifier
+        # surfaces as a fatal DownloadVerifierDirError. ensure_dirs()/
+        # _mount_targets() are inherited unchanged from BaseEnvironment and
+        # rely only on generic self.exec(), so this fix needed no new
+        # contree-sdk API - just calling what BaseEnvironment already
+        # provides, in the same order E2B's real provider uses it.
+        await self.ensure_dirs(self._mount_targets(writable_only=True))
+
         await self._upload_environment_dir_after_start()
 
     async def stop(self, delete: bool) -> None:
@@ -283,18 +307,31 @@ class NebiusSandboxEnvironment(BaseEnvironment):
         # Confirmed: _ImageLike.ls(path) -> list[ImageFile | ImageDirectory]
         # (contree_sdk/sdk/objects/image_like/_async.py). Walk recursively,
         # mirroring E2BEnvironment.download_dir's structure.
+        #
+        # Bug fix (found running a real `harbor run` trial against a live
+        # Nebius sandbox on 2026-09-21): `entry.path` on the objects
+        # contree-sdk's ls() returns is the entry's bare name (e.g.
+        # "oracle.txt"), NOT an absolute path under source_dir - the
+        # original `Path(entry_path).relative_to(Path(source_dir))` here
+        # assumed the latter and raised
+        # "'oracle.txt' is not in the subpath of '/logs/agent'" on the very
+        # first real download. Build the absolute child path ourselves from
+        # source_dir + the entry's basename instead of trusting entry.path
+        # to already be absolute.
         entries = await self._image.ls(source_dir)
         target_dir = Path(target_dir)
+        source_dir_posix = source_dir.rstrip("/") or "/"
         for entry in entries:
             entry_path = getattr(entry, "path", None) or str(entry)
-            rel = Path(entry_path).relative_to(Path(source_dir))
+            rel = PurePosixPath(entry_path).name
+            full_entry_path = f"{source_dir_posix}/{rel}"
             is_dir = type(entry).__name__ == "ImageDirectory"
             if is_dir:
                 (target_dir / rel).mkdir(parents=True, exist_ok=True)
-                await self.download_dir(entry_path, target_dir / rel)
+                await self.download_dir(full_entry_path, target_dir / rel)
             else:
                 (target_dir / rel).parent.mkdir(parents=True, exist_ok=True)
-                await self.download_file(entry_path, target_dir / rel)
+                await self.download_file(full_entry_path, target_dir / rel)
 
     async def exec(
         self,
